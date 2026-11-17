@@ -70,7 +70,7 @@ def test_edit_approve_publish_flow():
     assert e.json()["edited"] is True
     client.post(f"/campaigns/{cid}/content/instagram/approve")
     p = client.post(f"/campaigns/{cid}/publish", json={"platforms": ["instagram"]}).json()
-    assert p["content"]["instagram"]["status"] == "published" and p["status"] != "published"
+    assert p["content"]["instagram"]["status"] == "published" and p["results"][0]["success"] is True
     assert client.patch(f"/campaigns/{cid}/content/instagram", json={"body": "x"}).status_code == 409
     client.post(f"/campaigns/{cid}/content/linkedin/approve")
     assert client.post(f"/campaigns/{cid}/publish").json()["status"] == "published"
