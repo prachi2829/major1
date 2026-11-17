@@ -1,242 +1,117 @@
 import React, { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api } from '../api.js'
 
-const PLAT_CONFIG = {
-  instagram: { name: 'Instagram', icon: '📸', color: '#E1306C', envVar: 'INSTAGRAM_ACCESS_TOKEN & INSTAGRAM_ACCOUNT_ID' },
-  linkedin: { name: 'LinkedIn', icon: '💼', color: '#0077B5', envVar: 'LINKEDIN_ACCESS_TOKEN & LINKEDIN_AUTHOR_URN' },
-  facebook: { name: 'Facebook', icon: '👥', color: '#1877F2', envVar: 'FACEBOOK_ACCESS_TOKEN & FACEBOOK_PAGE_ID' },
-  twitter: { name: 'X / Twitter', icon: '🐦', color: '#1DA1F2', envVar: 'TWITTER_BEARER_TOKEN' },
-}
+const PLATFORMS = [
+  { id: 'instagram', name: 'Instagram', icon: '📸', detail: 'Professional account linked to a Facebook Page' },
+  { id: 'facebook', name: 'Facebook Pages', icon: '👥', detail: 'Publish to Pages you manage' },
+  { id: 'linkedin', name: 'LinkedIn', icon: '💼', detail: 'Publish text posts to your member profile' },
+  { id: 'twitter', name: 'X / Twitter', icon: '𝕏', detail: 'Publish posts using OAuth 2.0 user authorization' },
+]
 
 export default function SocialAccounts({ notify }) {
   const [accounts, setAccounts] = useState([])
-  const [liveStatus, setLiveStatus] = useState({})
-  const [verifying, setVerifying] = useState(false)
+  const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [adding, setAdding] = useState(false)
-  const [testingEvent, setTestingEvent] = useState(false)
-  const [campaigns, setCampaigns] = useState([])
-  const [selectedCamp, setSelectedCamp] = useState('')
-  const [form, setForm] = useState({ platform: 'twitter', account_name: '', token: '' })
+  const [disconnecting, setDisconnecting] = useState('')
+  const location = useLocation()
 
   const load = async () => {
     try {
-      const [accs, camps] = await Promise.all([
-        api.getSocialAccounts(),
-        api.list(),
-      ])
-      setAccounts(accs || [])
-      setCampaigns(camps || [])
-      if (camps && camps.length > 0) setSelectedCamp(camps[0].id)
-    } catch (e) {
-      if (notify) notify(e.message, 'err')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
-
-  const handleVerify = async () => {
-    setVerifying(true)
-    try {
-      const res = await api.verifyConnections()
-      setLiveStatus(res || {})
-      const connectedCount = Object.values(res || {}).filter(Boolean).length
-      if (connectedCount > 0) {
-        notify(`${connectedCount} live API connection(s) active!`)
-      } else {
-        notify('Platform adapters in active standby. Add API keys in backend/.env to connect live.', 'err')
-      }
+      const [connected, settings] = await Promise.all([api.getSocialAccounts(), api.oauthConfig()])
+      setAccounts(connected || [])
+      setConfig(settings)
     } catch (e) {
       notify(e.message, 'err')
-    } finally {
-      setVerifying(false)
-    }
+    } finally { setLoading(false) }
   }
 
-  const handleConnect = async (e) => {
-    e.preventDefault()
-    if (!form.account_name) return
-    try {
-      await api.connectSocialAccount({
-        platform: form.platform,
-        account_name: form.account_name,
-        credentials: {
-          token_preview: form.token ? `${form.token.slice(0, 8)}...` : 'env_managed',
-          connected_at: new Date().toISOString(),
-        },
-      })
-      notify(`Authorized ${form.account_name} on ${PLAT_CONFIG[form.platform]?.name || form.platform}`)
-      setForm({ platform: 'twitter', account_name: '', token: '' })
-      setAdding(false)
-      load()
-    } catch (err) {
-      notify(err.message, 'err')
-    }
-  }
+  useEffect(() => {
+    load()
+    const params = new URLSearchParams(location.search)
+    const connected = params.get('connected')
+    const error = params.get('oauth_error')
+    if (connected) notify(`${connected} OAuth connection completed. Select it when publishing.`)
+    if (error) notify(error, 'err')
+    if (connected || error) window.history.replaceState({}, '', '/social')
+  }, [location.search])
 
-  const handleDisconnect = async (aid, name) => {
-    if (!window.confirm(`Disconnect ${name}?`)) return
-    try {
-      await api.disconnectSocialAccount(aid)
-      notify(`Disconnected ${name}`)
-      load()
-    } catch (err) {
-      notify(err.message, 'err')
-    }
-  }
-
-  const handleSendLiveEvent = async (eventType) => {
-    if (!selectedCamp) {
-      notify('Select a campaign first', 'err')
+  const connect = (platform) => {
+    if (!config?.configured?.encryption) {
+      notify('Backend token encryption is not configured. Set SOCIAL_TOKEN_ENCRYPTION_KEY first.', 'err')
       return
     }
-    setTestingEvent(true)
-    try {
-      await api.recordLiveEvent(selectedCamp, 'instagram', eventType, 1)
-      notify(`Live ${eventType} event ingested and recorded in database!`)
-    } catch (e) {
-      notify(e.message, 'err')
-    } finally {
-      setTestingEvent(false)
+    const provider = platform === 'instagram' || platform === 'facebook' ? 'meta' : platform
+    if (!config?.configured?.[provider]) {
+      notify(`Add the ${provider.toUpperCase()} OAuth client ID and secret to backend/.env, then restart the backend.`, 'err')
+      return
     }
+    window.location.assign(`/oauth/${platform}/start`.startsWith('/oauth/') ? (import.meta.env.VITE_API_URL || 'http://localhost:8000') + `/oauth/${platform}/start` : `/oauth/${platform}/start`)
+  }
+
+  const disconnect = async (account) => {
+    if (!window.confirm(`Disconnect ${account.account_name}?`)) return
+    setDisconnecting(account.id)
+    try {
+      await api.disconnectSocialAccount(account.id)
+      notify(`${account.account_name} disconnected`)
+      await load()
+    } catch (e) { notify(e.message, 'err') } finally { setDisconnecting('') }
   }
 
   return (
     <section className="page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Phase 3 · Real-Time Social Media Integration</p>
-          <h2>Platform <em>API Connectors</em></h2>
-          <p className="sub tight">
-            Connect live developer API credentials for automatic publishing, live impressions, and real conversion ingestion.
-          </p>
+          <p className="eyebrow">OAuth 2.0 · Live Publishing</p>
+          <h2>Connect your <em>social accounts</em></h2>
+          <p className="sub tight">Authorize Campaign.AI through each platform. Your access tokens are encrypted and stored on the backend; they are never sent to the browser.</p>
         </div>
-        <div className="cta-row nomargin">
-          <button className="btn small ghost" disabled={verifying} onClick={handleVerify}>
-            {verifying ? 'Checking APIs…' : '⚡ Check Live API Connections'}
-          </button>
-          <button className="btn small" onClick={() => setAdding(!adding)}>
-            {adding ? 'Close' : '+ Connect Channel'}
-          </button>
-        </div>
+        <button className="btn small ghost" onClick={load}>↻ Refresh</button>
       </div>
 
-      {/* Guide Banner */}
-      <div className="notice" style={{ background: 'var(--card)', border: '1.5px solid var(--ink)', borderRadius: '16px', padding: '18px 24px' }}>
-        <strong>🔑 How to connect real platform APIs:</strong>
-        <p className="small-text muted" style={{ margin: '6px 0 0' }}>
-          Paste your live Developer API keys in <code>backend/.env</code>:
-          <br />
-          <code>TWITTER_BEARER_TOKEN</code> · <code>LINKEDIN_ACCESS_TOKEN</code> · <code>INSTAGRAM_ACCESS_TOKEN</code> · <code>FACEBOOK_ACCESS_TOKEN</code>
-        </p>
+      <div className="notice" style={{ background: 'var(--card)', border: '1.5px solid var(--ink)', borderRadius: '16px', padding: '18px 24px', marginBottom: 24 }}>
+        <strong>Before connecting</strong>
+        <p className="small-text muted">Create developer apps and add the exact callback URLs shown below. Meta uses one app for Facebook and Instagram. Provider review/permissions may be required before accounts outside your developer/test roles can authorize.</p>
+        {config && <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+          {Object.entries(config.redirect_uris || {}).map(([provider, uri]) => (
+            <div key={provider} className="small-text"><b>{provider.toUpperCase()} callback:</b> <code>{uri}</code></div>
+          ))}
+          <div className="small-text"><b>Token encryption:</b> {config.configured.encryption ? 'Configured ✓' : 'Missing — set SOCIAL_TOKEN_ENCRYPTION_KEY'}</div>
+        </div>}
       </div>
 
-      {adding && (
-        <form onSubmit={handleConnect} className="form" style={{ maxWidth: '540px', marginBottom: '30px' }}>
-          <h3>Authorize Channel Handle</h3>
-          <label className="field">
-            <span>Platform</span>
-            <select
-              value={form.platform}
-              onChange={(e) => setForm({ ...form, platform: e.target.value })}
-              style={{ padding: '10px', borderRadius: '8px', border: '1.5px solid var(--line)' }}
-            >
-              <option value="twitter">X / Twitter (Twitter API v2)</option>
-              <option value="linkedin">LinkedIn (Community Management API)</option>
-              <option value="instagram">Instagram (Meta Graph API)</option>
-              <option value="facebook">Facebook (Pages Graph API)</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Account Handle / Page Name</span>
-            <input
-              required
-              placeholder="@brand_handle or Company Name"
-              value={form.account_name}
-              onChange={(e) => setForm({ ...form, account_name: e.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Access Token / Bearer Token <small>(optional if set in .env)</small></span>
-            <input
-              type="password"
-              placeholder="Paste platform API token..."
-              value={form.token}
-              onChange={(e) => setForm({ ...form, token: e.target.value })}
-            />
-          </label>
-          <div className="cta-row">
-            <button type="submit" className="btn small">Save &amp; Authorize Channel</button>
-            <button type="button" className="btn small ghost" onClick={() => setAdding(false)}>Cancel</button>
-          </div>
-        </form>
-      )}
-
-      {/* Live Event Ingestion Tester */}
-      <div className="panel" style={{ marginBottom: '30px', background: 'var(--paper-2)' }}>
-        <div className="panel-head">
-          <div>
-            <h3>🎯 Live Traffic &amp; Conversion Ingestion Webhook</h3>
-            <p>Simulate real users clicking UTM links and converting on your website.</p>
-          </div>
-        </div>
-        <div style={{ padding: '0 24px 24px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <select
-            value={selectedCamp}
-            onChange={(e) => setSelectedCamp(e.target.value)}
-            style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--line)', background: '#fff' }}
-          >
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>{c.input.name}</option>
-            ))}
-          </select>
-          <button className="btn small ghost" disabled={testingEvent} onClick={() => handleSendLiveEvent('click')}>
-            + Ingest 1 Real Click
-          </button>
-          <button className="btn small" disabled={testingEvent} onClick={() => handleSendLiveEvent('conversion')}>
-            + Ingest 1 Real Conversion (Sale/Signup)
-          </button>
-        </div>
-      </div>
-
-      {loading ? (
-        <p className="muted">Loading connected channels…</p>
-      ) : (
-        <div className="cards">
-          {accounts.map((acc) => {
-            const plat = acc.platform.toLowerCase()
-            const cfg = PLAT_CONFIG[plat] || { name: acc.platform, icon: '🔗', color: '#333' }
-            const isLive = liveStatus[plat]
-
-            return (
-              <div key={acc.id} className="camp" style={{ borderTop: `4px solid ${cfg.color}` }}>
-                <div className="camp-top">
-                  <span style={{ fontSize: '1.5rem' }}>{cfg.icon}</span>
-                  <span className={`status-pill ${isLive ? 'published' : 'strategy_ready'}`}>
-                    {isLive ? '🟢 Live API Connected' : '🟡 Standby Adapter'}
-                  </span>
-                </div>
-                <h3 style={{ marginTop: '10px' }}>{acc.account_name}</h3>
-                <p className="muted small-text">{cfg.name}</p>
-                <p className="small-text muted" style={{ fontSize: '0.75rem', marginTop: '4px' }}>
-                  Managed via: <code>{cfg.envVar}</code>
-                </p>
-                <div className="camp-actions" style={{ marginTop: 'auto', paddingTop: '14px' }}>
-                  <button
-                    className="btn ghost small"
-                    style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                    onClick={() => handleDisconnect(acc.id, acc.account_name)}
-                  >
-                    Disconnect
+      <div className="cards">
+        {PLATFORMS.map((platform) => {
+          const linked = accounts.filter((a) => a.platform === platform.id)
+          const provider = platform.id === 'instagram' || platform.id === 'facebook' ? 'meta' : platform.id
+          const ready = config?.configured?.[provider] && config?.configured?.encryption
+          return (
+            <div className="camp" key={platform.id} style={{ borderTop: '4px solid var(--ink)' }}>
+              <div className="camp-top">
+                <span style={{ fontSize: '1.6rem' }}>{platform.icon}</span>
+                <span className={`status-pill ${linked.length ? 'published' : 'strategy_ready'}`}>{linked.length ? `${linked.length} connected` : 'Not connected'}</span>
+              </div>
+              <h3 style={{ marginTop: 12 }}>{platform.name}</h3>
+              <p className="muted small-text">{platform.detail}</p>
+              <button className="btn small" disabled={!ready} onClick={() => connect(platform.id)} style={{ marginTop: 14 }}>
+                {ready ? `Connect ${platform.name}` : 'Configure backend first'}
+              </button>
+              {!ready && <p className="muted small-text" style={{ marginTop: 8 }}>Set the {provider.toUpperCase()} app credentials and encryption key in backend/.env.</p>}
+              {linked.map((account) => (
+                <div key={account.id} style={{ borderTop: '1px solid var(--line)', marginTop: 14, paddingTop: 12 }}>
+                  <b>{account.account_name}</b>
+                  <p className="muted small-text">Connected {new Date(account.connected_at).toLocaleString()}</p>
+                  <button className="btn ghost small" disabled={disconnecting === account.id} onClick={() => disconnect(account)}>
+                    {disconnecting === account.id ? 'Disconnecting…' : 'Disconnect'}
                   </button>
                 </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
+              ))}
+            </div>
+          )
+        })}
+      </div>
+      <p className="muted small-text" style={{ marginTop: 24 }}>Instagram publishing currently supports image posts using a publicly accessible HTTPS image URL. Facebook Pages, LinkedIn member posts and X text posts are supported. Platform API access is subject to each provider’s app review, account type, scopes and rate limits.</p>
     </section>
   )
 }
