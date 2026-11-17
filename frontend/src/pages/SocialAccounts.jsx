@@ -46,7 +46,8 @@ export default function SocialAccounts({ notify }) {
       notify(`Add the ${provider.toUpperCase()} OAuth client ID and secret to backend/.env, then restart the backend.`, 'err')
       return
     }
-    window.location.assign(`/oauth/${platform}/start`.startsWith('/oauth/') ? (import.meta.env.VITE_API_URL || 'http://localhost:8000') + `/oauth/${platform}/start` : `/oauth/${platform}/start`)
+    const backend = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\\/$/, '')
+    window.location.assign(`${backend}/oauth/${platform}/start`)
   }
 
   const disconnect = async (account) => {
