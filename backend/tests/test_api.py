@@ -61,7 +61,11 @@ def test_full_pipeline():
     assert c["content"]["instagram"]["hashtags"] == ["#t1", "#t2"]
 
 
-def test_edit_approve_publish_flow():
+def test_edit_approve_publish_flow(monkeypatch):
+    import app.main as main
+    async def fake_publish(platform, content, campaign_id, media_url=None, account_id=None):
+        return {"platform": platform, "success": True, "post_id": "test-post", "url": "https://example.com/test-post", "error": None}
+    monkeypatch.setattr(main, "publish_to_platform", fake_publish)
     cid = _create()["id"]
     client.post(f"/campaigns/{cid}/strategy")
     client.post(f"/campaigns/{cid}/content")
@@ -70,7 +74,7 @@ def test_edit_approve_publish_flow():
     assert e.json()["edited"] is True
     client.post(f"/campaigns/{cid}/content/instagram/approve")
     p = client.post(f"/campaigns/{cid}/publish", json={"platforms": ["instagram"]}).json()
-    assert p["content"]["instagram"]["status"] == "published" and p["status"] != "published"
+    assert p["content"]["instagram"]["status"] == "published" and p["results"][0]["success"] is True
     assert client.patch(f"/campaigns/{cid}/content/instagram", json={"body": "x"}).status_code == 409
     client.post(f"/campaigns/{cid}/content/linkedin/approve")
     assert client.post(f"/campaigns/{cid}/publish").json()["status"] == "published"
@@ -146,7 +150,11 @@ def test_http_layer_success_and_error_mapping(monkeypatch):
 
 
 # ---------------------------------------------------------------- Phase 2
-def _published_campaign():
+def _published_campaign(monkeypatch):
+    import app.main as main
+    async def fake_publish(platform, content, campaign_id, media_url=None, account_id=None):
+        return {"platform": platform, "success": True, "post_id": "test-post", "url": "https://example.com/test-post", "error": None}
+    monkeypatch.setattr(main, "publish_to_platform", fake_publish)
     cid = _create()["id"]
     client.post(f"/campaigns/{cid}/strategy")
     client.post(f"/campaigns/{cid}/content")
@@ -162,8 +170,8 @@ def test_analytics_requires_published_content():
     assert rep["has_data"] is False and rep["simulated"] is True
 
 
-def test_analytics_simulated_deterministic_and_labeled():
-    cid = _published_campaign()
+def test_analytics_simulated_deterministic_and_labeled(monkeypatch):
+    cid = _published_campaign(monkeypatch)
     a = client.post(f"/campaigns/{cid}/analytics/simulate").json()
     assert a["has_data"] and a["simulated"] is True
     assert [p["platform"] for p in a["platforms"]] == ["instagram"]  # only published platforms
@@ -176,8 +184,8 @@ def test_analytics_simulated_deterministic_and_labeled():
     assert client.get(f"/campaigns/{cid}/analytics").json()["totals"] == a["totals"]
 
 
-def test_analytics_overview_and_delete_cascades():
-    cid = _published_campaign()
+def test_analytics_overview_and_delete_cascades(monkeypatch):
+    cid = _published_campaign(monkeypatch)
     client.post(f"/campaigns/{cid}/analytics/simulate")
     ov = client.get("/analytics/overview").json()
     assert len(ov) == 1 and ov[0]["campaign_id"] == cid and ov[0]["has_data"]

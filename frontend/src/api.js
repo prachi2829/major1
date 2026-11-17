@@ -36,7 +36,7 @@ export const api = {
   analytics: (id) => req(`/campaigns/${id}/analytics`),
   simulateAnalytics: (id) => post(`/campaigns/${id}/analytics/simulate`),
   overview: () => req('/analytics/overview'),
-  publish: (id, platforms) => post(`/campaigns/${id}/publish`, platforms ? { platforms } : {}),
+  publish: (id, platforms, media_urls = {}, account_ids = {}) => post(`/campaigns/${id}/publish`, { platforms, media_urls, account_ids }),
 
   // Phase 2 Remaining: Scheduling, AI Feedback & Social Integrations
   schedulePost: (id, payload) => post(`/campaigns/${id}/schedule`, payload),
@@ -46,7 +46,8 @@ export const api = {
   getFeedback: (id) => post(`/campaigns/${id}/feedback`),
   getFeedbackHistory: (id) => req(`/campaigns/${id}/feedback`),
   getSocialAccounts: () => req('/social-accounts'),
-  connectSocialAccount: (data) => post('/social-accounts', data),
+  oauthConfig: () => req('/oauth/config'),
+  publishingHistory: (campaignId) => req('/oauth/publishing/history' + (campaignId ? '?campaign_id=' + encodeURIComponent(campaignId) : '')),
   disconnectSocialAccount: (aid) => req(`/social-accounts/${aid}`, { method: 'DELETE' }),
   verifyConnections: () => req('/publishing/verify'),
   recordLiveEvent: (campaign_id, platform, event_type, count = 1) => post('/analytics/events', { campaign_id, platform, event_type, count }),

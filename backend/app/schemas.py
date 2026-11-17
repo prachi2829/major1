@@ -54,6 +54,8 @@ class PlatformContent(BaseModel):
     status: Literal["draft", "approved", "published"] = "draft"
     edited: bool = False
     published_at: Optional[str] = None
+    platform_post_id: Optional[str] = None
+    publish_url: Optional[str] = None
     source: str = "gemini"
 
     @field_validator("headline", "call_to_action", mode="before")
@@ -149,6 +151,8 @@ class ScheduleRead(BaseModel):
 # ── Publishing Schemas (Phase 2b) ──────────────────────────────────
 class PublishRequest(BaseModel):
     platforms: Optional[List[str]] = None
+    media_urls: Dict[str, str] = Field(default_factory=dict)
+    account_ids: Dict[str, str] = Field(default_factory=dict)
 
 
 class PublishResultSchema(BaseModel):

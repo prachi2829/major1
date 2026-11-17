@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from .publishing import publisher
+from .social.oauth import publish_to_platform
 from .store import store
 
 logger = logging.getLogger("campaign_ai.scheduler")
@@ -34,8 +34,8 @@ async def process_due_posts() -> int:
         store.update_schedule(post_id, {"status": "publishing"})
 
         try:
-            result = await publisher.publish_post(platform, content)
-            if result.success:
+            result = await publish_to_platform(platform, content, cid, media_url=content.get("media_url"), account_id=content.get("account_id"))
+            if result.get("success"):
                 published_at = datetime.now(timezone.utc).isoformat()
                 store.update_schedule(
                     post_id,
@@ -45,17 +45,28 @@ async def process_due_posts() -> int:
                         "error": None,
                     },
                 )
-                logger.info(f"Post {post_id} published to {platform} (url={result.url})")
+                campaign = store.get(cid)
+                if campaign and platform in campaign.content:
+                    campaign_post = campaign.content[platform]
+                    campaign_post.status = "published"
+                    campaign_post.published_at = published_at
+                    campaign_post.platform_post_id = result.get("post_id")
+                    campaign_post.publish_url = result.get("url")
+                    campaign.content[platform] = campaign_post
+                    if all(campaign.content.get(p) and campaign.content[p].status == "published" for p in campaign.input.platforms):
+                        campaign.status = "published"
+                    store.update(campaign)
+                logger.info("Post " + post_id + " published to " + platform + " (url=" + str(result.get("url")) + ")")
                 count += 1
             else:
                 store.update_schedule(
                     post_id,
                     {
                         "status": "failed",
-                        "error": result.error or "Unknown publishing error",
+                        "error": result.get("error") or "Unknown publishing error",
                     },
                 )
-                logger.warning(f"Failed to publish {post_id} on {platform}: {result.error}")
+                logger.warning("Failed to publish " + post_id + " on " + platform + ": " + str(result.get("error")) )
         except Exception as exc:
             logger.exception(f"Exception publishing scheduled post {post_id}")
             store.update_schedule(

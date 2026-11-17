@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import os
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,6 @@ from .agents import (
 )
 from .analytics import build_report, simulate
 from .feedback import run_feedback_agent
-from .publishing import publisher
 from .scheduler import start_scheduler, stop_scheduler
 from .schemas import (
     ABTestRead,
@@ -40,10 +40,9 @@ from .schemas import (
     ScheduleCreate,
     SchedulePatch,
     ScheduleRead,
-    SocialAccountCreate,
-    SocialAccountRead,
 )
 from .store import store
+from .social.oauth import router as oauth_router, list_accounts as oauth_list_accounts, delete_account as oauth_delete_account, publish_to_platform
 
 
 @asynccontextmanager
@@ -53,11 +52,12 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="Campaign.AI", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="Campaign.AI", version="3.1.0", lifespan=lifespan)
+app.include_router(oauth_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -229,33 +229,41 @@ async def approve_platform_content(cid: str, platform: str):
 
 
 # ── Publishing Flow ─────────────────────────────────────────────────
-@app.post("/campaigns/{cid}/publish", response_model=Campaign)
-@app.post("/api/campaigns/{cid}/publish", response_model=Campaign)
+@app.post("/campaigns/{cid}/publish")
+@app.post("/api/campaigns/{cid}/publish")
 async def publish_campaign(cid: str, body: PublishRequest = Body(default_factory=PublishRequest)):
     c = store.get(cid)
     if not c:
         raise HTTPException(404, "Campaign not found")
-
-    target_platforms = [p.lower().strip() for p in (body.platforms or c.input.platforms)]
+    target_platforms = list(dict.fromkeys(p.lower().strip() for p in (body.platforms or c.input.platforms)))
+    invalid = [p for p in target_platforms if p not in c.input.platforms]
+    if invalid:
+        raise HTTPException(400, f"Platforms are not part of this campaign: {', '.join(invalid)}")
     eligible = [p for p in target_platforms if c.content.get(p) and c.content[p].status == "approved"]
-
     if not eligible:
         raise HTTPException(409, "No approved posts available to publish")
-
+    results = []
     now = datetime.now(timezone.utc).isoformat()
-    for p in eligible:
-        post = c.content[p]
-        post.status = "published"
-        post.published_at = now
-        c.content[p] = post
-
-    # If all campaign platforms are now published, update overall status
+    for platform in eligible:
+        post = c.content[platform]
+        result = await publish_to_platform(platform, post.model_dump(), cid,
+            media_url=(body.media_urls or {}).get(platform),
+            account_id=(body.account_ids or {}).get(platform))
+        results.append(result)
+        if result.get("success"):
+            post.status = "published"
+            post.published_at = now
+            post.platform_post_id = result.get("post_id")
+            post.publish_url = result.get("url")
+        c.content[platform] = post
     if all(c.content.get(p) and c.content[p].status == "published" for p in c.input.platforms):
         c.status = "published"
-
     store.update(c)
-    store.log_agent_activity("Publishing Agent", f"Published {len(eligible)} platforms for '{c.input.name}'", "completed")
-    return c
+    succeeded = sum(1 for item in results if item.get("success"))
+    failed = len(results) - succeeded
+    store.log_agent_activity("Publishing Agent", f"Live publishing: {succeeded} succeeded, {failed} failed for '{c.input.name}'", "completed" if not failed else "warning")
+    return {"campaign_id": cid, "status": "published" if succeeded and not failed else "partial" if succeeded else "failed",
+            "results": results, "content": {k: v.model_dump() for k, v in c.content.items()}}
 
 
 # ── Analytics ───────────────────────────────────────────────────────
@@ -373,30 +381,24 @@ async def cancel_schedule(sid: str):
 
 
 # ── Social Accounts Endpoints ───────────────────────────────────────
-@app.get("/social-accounts", response_model=List[SocialAccountRead])
-@app.get("/api/social-accounts", response_model=List[SocialAccountRead])
+@app.get("/social-accounts")
+@app.get("/api/social-accounts")
 async def list_social_accounts():
-    return store.list_social_accounts()
-
-
-@app.post("/social-accounts", response_model=SocialAccountRead, status_code=201)
-@app.post("/api/social-accounts", response_model=SocialAccountRead, status_code=201)
-async def connect_social_account(body: SocialAccountCreate):
-    return store.create_social_account(body.platform, body.account_name, body.credentials)
+    return oauth_list_accounts()
 
 
 @app.delete("/social-accounts/{aid}", status_code=204)
 @app.delete("/api/social-accounts/{aid}", status_code=204)
 async def disconnect_social_account(aid: str):
-    ok = store.delete_social_account(aid)
-    if not ok:
+    if not oauth_delete_account(aid):
         raise HTTPException(404, "Social account not found")
 
 
 @app.get("/publishing/verify")
 @app.get("/api/publishing/verify")
 async def verify_platform_connections_endpoint():
-    return await publisher.verify_platform_connections()
+    accounts = oauth_list_accounts()
+    return {platform: any(a["platform"] == platform for a in accounts) for platform in ("instagram", "facebook", "linkedin", "twitter")}
 
 
 # ── AI Feedback Loop ────────────────────────────────────────────────

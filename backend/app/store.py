@@ -123,23 +123,6 @@ class SQLiteStore:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
 
-        # Seed default social accounts if none
-        cur = conn.execute("SELECT COUNT(*) AS c FROM social_accounts")
-        if cur.fetchone()["c"] == 0:
-            now = datetime.now(timezone.utc).isoformat()
-            defaults = [
-                ("instagram", "@campaign_brand_ai"),
-                ("linkedin", "CampaignAI Global"),
-                ("facebook", "Campaign.AI Official"),
-                ("twitter", "@campaign_ai_hq"),
-            ]
-            for plat, handle in defaults:
-                aid = f"acc_{plat[:3]}_{uuid.uuid4().hex[:6]}"
-                conn.execute(
-                    "INSERT INTO social_accounts VALUES (?, ?, ?, '{}', 1, ?)",
-                    (aid, plat, handle, now),
-                )
-            conn.commit()
         conn.close()
 
     def clear(self) -> None:
@@ -151,27 +134,9 @@ class SQLiteStore:
                 conn.execute(f"DELETE FROM {tbl}")
             except Exception:
                 pass
-        self._seed_social_defaults(conn)
         conn.commit()
         if self._shared_mem is None:
             conn.close()
-
-    def _seed_social_defaults(self, conn: sqlite3.Connection) -> None:
-        cur = conn.execute("SELECT COUNT(*) AS c FROM social_accounts")
-        if cur.fetchone()["c"] == 0:
-            now = datetime.now(timezone.utc).isoformat()
-            defaults = [
-                ("instagram", "@campaign_brand_ai"),
-                ("linkedin", "CampaignAI Global"),
-                ("facebook", "Campaign.AI Official"),
-                ("twitter", "@campaign_ai_hq"),
-            ]
-            for plat, handle in defaults:
-                aid = f"acc_{plat[:3]}_{uuid.uuid4().hex[:6]}"
-                conn.execute(
-                    "INSERT INTO social_accounts VALUES (?, ?, ?, '{}', 1, ?)",
-                    (aid, plat, handle, now),
-                )
 
     # ── Core Campaign CRUD ──────────────────────────────────────────
     def create(self, inp: CampaignCreate) -> Campaign:

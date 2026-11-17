@@ -17,25 +17,14 @@ def clean_db():
     yield
 
 def test_scheduling_and_social_accounts():
-    # 1. Connect social account
-    acc = client.post("/social-accounts", json={
-        "platform": "twitter",
-        "account_name": "Test Brand",
-        "credentials": {
-            "api_key": "test_key",
-            "api_secret": "test_secret"
-        }
-    }).json()
-    assert acc["platform"] == "twitter"
-    assert acc["connected"] is True
+    # 1. OAuth configuration is discoverable; accounts are only added after provider consent.
+    config = client.get("/oauth/config").json()
+    assert "meta" in config["configured"] and "twitter" in config["configured"]
 
-    # List accounts
-    accs = client.get("/social-accounts").json()
-    assert len(accs) >= 1
-
-    # Verify publishing connections
+    # Verify publishing connections without pretending unconfigured accounts are connected.
     verify = client.get("/publishing/verify").json()
-    assert "twitter" in verify
+    assert set(verify) == {"instagram", "facebook", "linkedin", "twitter"}
+    assert all(value is False for value in verify.values())
 
     # 2. Create campaign and schedule post
     camp = client.post("/campaigns", json={

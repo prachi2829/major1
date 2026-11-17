@@ -18,6 +18,9 @@ export default function Workspace({ notify, health }) {
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduleTime, setScheduleTime] = useState('')
   const [scheduling, setScheduling] = useState(false)
+  const [mediaUrls, setMediaUrls] = useState({})
+  const [socialAccounts, setSocialAccounts] = useState([])
+  const [accountIds, setAccountIds] = useState({})
   const timers = useRef({})
 
   const loadSchedules = useCallback(async () => {
@@ -37,6 +40,7 @@ export default function Workspace({ notify, health }) {
   }, [id, loadSchedules])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { api.getSocialAccounts().then(setSocialAccounts).catch(() => setSocialAccounts([])) }, [])
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), [])
 
   async function run(label, fn, okMsg) {
@@ -62,7 +66,7 @@ export default function Workspace({ notify, health }) {
         campaign_id: id,
         platform: p,
         scheduled_at: iso,
-        content: c.content[p],
+        content: { ...c.content[p], media_url: mediaUrls[p] || null, account_id: accountIds[p] || null },
       })
       notify(`${PLAT_LABEL[p]} queued for distribution`)
       await loadSchedules()
@@ -257,6 +261,22 @@ export default function Workspace({ notify, health }) {
                   <span>Call to action</span>
                   <input disabled={locked} value={cur.call_to_action || ''} onChange={(e) => onEdit(tab, { call_to_action: e.target.value })} />
                 </label>
+                {socialAccounts.filter((a) => a.platform === tab).length > 1 && (
+                  <label className="field">
+                    <span>Publish to account</span>
+                    <select value={accountIds[tab] || ''} onChange={(e) => setAccountIds((v) => ({ ...v, [tab]: e.target.value }))}>
+                      <option value="">Most recently connected account</option>
+                      {socialAccounts.filter((a) => a.platform === tab).map((a) => <option key={a.id} value={a.id}>{a.account_name}</option>)}
+                    </select>
+                  </label>
+                )}
+                {tab === 'instagram' && (
+                  <label className="field">
+                    <span>Public image URL <small>(required for Instagram image publishing)</small></span>
+                    <input type="url" placeholder="https://your-domain.com/post-image.jpg" value={mediaUrls.instagram || ''} onChange={(e) => setMediaUrls((v) => ({ ...v, instagram: e.target.value }))} />
+                    <small>Meta must be able to fetch this HTTPS image URL without logging in.</small>
+                  </label>
+                )}
 
                 <div className="cta-row">
                   <button className="btn small ghost" disabled={locked || !!busy}
@@ -272,7 +292,7 @@ export default function Workspace({ notify, health }) {
               <div className="prev-col">
                 <small className="label">Live preview · {PLAT_LABEL[tab]}</small>
                 <Preview platform={tab} content={cur} brand={input.name} />
-                {locked && cur.published_at && <p className="muted small-text">Published {new Date(cur.published_at).toLocaleString()} (simulated)</p>}
+                {locked && cur.published_at && <p className="muted small-text">Published {new Date(cur.published_at).toLocaleString()} {cur.publish_url && <>· <a href={cur.publish_url} target="_blank" rel="noreferrer">View live post</a></>}</p>}
               </div>
             </div>
           )}
@@ -291,7 +311,15 @@ export default function Workspace({ notify, health }) {
                 📅 {showSchedule ? 'Close Schedule' : 'Schedule for Later'}
               </button>
               <button className="btn" disabled={!!busy || allPublished || approvedCount === 0}
-                onClick={() => run('publish', () => api.publish(id, platforms.filter((p) => content[p]?.status === 'approved')), 'Approved content published')}>
+                onClick={() => run('publish', async () => {
+                  const result = await api.publish(id, platforms.filter((p) => content[p]?.status === 'approved'), mediaUrls, accountIds)
+                  const updated = await api.get(id)
+                  setC(updated)
+                  const failures = (result.results || []).filter((item) => !item.success)
+                  if (failures.length) notify(failures.map((item) => item.platform + ': ' + (item.error || 'Publishing failed')).join(' · '), 'err')
+                  else notify('Published successfully to ' + (result.results || []).length + ' platform(s).')
+                  return null
+                }, null)}>
                 {allPublished ? 'All published ✓' : busy === 'publish' ? 'Publishing…' : 'Publish approved now'}
               </button>
             </div>
