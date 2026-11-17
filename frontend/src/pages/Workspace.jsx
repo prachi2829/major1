@@ -63,7 +63,7 @@ export default function Workspace({ notify, health }) {
         campaign_id: id,
         platform: p,
         scheduled_at: iso,
-        content: c.content[p],
+        content: { ...c.content[p], media_url: mediaUrls[p] || null },
       })
       notify(`${PLAT_LABEL[p]} queued for distribution`)
       await loadSchedules()
