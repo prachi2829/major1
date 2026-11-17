@@ -18,6 +18,7 @@ export default function SocialAccounts({ notify }) {
 
   const load = async () => {
     try {
+      await api.ensureGuestSession()
       const [connected, settings] = await Promise.all([api.getSocialAccounts(), api.oauthConfig()])
       setAccounts(connected || [])
       setConfig(settings)
@@ -67,12 +68,14 @@ export default function SocialAccounts({ notify }) {
         <div>
           <p className="eyebrow">OAuth 2.0 · Live Publishing</p>
           <h2>Connect your <em>social accounts</em></h2>
-          <p className="sub tight">Authorize Campaign.AI through each platform. Your access tokens are encrypted and stored on the backend; they are never sent to the browser.</p>
+          <p className="sub tight">Connect without creating an account. Your social connections are isolated to this browser session; encrypted tokens stay on the backend.</p>
         </div>
         <button className="btn small ghost" onClick={load}>↻ Refresh</button>
       </div>
 
       <div className="notice" style={{ background: 'var(--card)', border: '1.5px solid var(--ink)', borderRadius: '16px', padding: '18px 24px', marginBottom: 24 }}>
+        <strong>Private guest session</strong>
+        <p className="small-text muted">Your connected accounts are visible only in this browser session. Do not clear browser cookies or site data if you want to keep this session. For access from another device, a sign-in feature would be needed.</p>
         <strong>Before connecting</strong>
         <p className="small-text muted">Create developer apps and add the exact callback URLs shown below. Meta uses one app for Facebook and Instagram. Provider review/permissions may be required before accounts outside your developer/test roles can authorize.</p>
         {config && <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
