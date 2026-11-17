@@ -63,7 +63,7 @@ def test_full_pipeline():
 
 def test_edit_approve_publish_flow(monkeypatch):
     import app.main as main
-    async def fake_publish(platform, content, campaign_id, media_url=None, account_id=None):
+    async def fake_publish(session_id, platform, content, campaign_id, media_url=None, account_id=None):
         return {"platform": platform, "success": True, "post_id": "test-post", "url": "https://example.com/test-post", "error": None}
     monkeypatch.setattr(main, "publish_to_platform", fake_publish)
     cid = _create()["id"]
