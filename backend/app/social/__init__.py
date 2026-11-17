@@ -1,0 +1,1 @@
+# Social media adapter package.
