@@ -46,6 +46,8 @@ export const api = {
   getFeedback: (id) => post(`/campaigns/${id}/feedback`),
   getFeedbackHistory: (id) => req(`/campaigns/${id}/feedback`),
   getSocialAccounts: () => req('/social-accounts'),
+  oauthConfig: () => req('/oauth/config'),
+  publishingHistory: (campaignId) => req('/oauth/publishing/history' + (campaignId ? '?campaign_id=' + encodeURIComponent(campaignId) : '')),
   connectSocialAccount: (data) => post('/social-accounts', data),
   disconnectSocialAccount: (aid) => req(`/social-accounts/${aid}`, { method: 'DELETE' }),
   verifyConnections: () => req('/publishing/verify'),
