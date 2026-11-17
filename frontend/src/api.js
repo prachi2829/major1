@@ -36,7 +36,7 @@ export const api = {
   analytics: (id) => req(`/campaigns/${id}/analytics`),
   simulateAnalytics: (id) => post(`/campaigns/${id}/analytics/simulate`),
   overview: () => req('/analytics/overview'),
-  publish: (id, platforms) => post(`/campaigns/${id}/publish`, platforms ? { platforms } : {}),
+  publish: (id, platforms, media_urls = {}) => post(`/campaigns/${id}/publish`, { platforms, media_urls }),
 
   // Phase 2 Remaining: Scheduling, AI Feedback & Social Integrations
   schedulePost: (id, payload) => post(`/campaigns/${id}/schedule`, payload),
