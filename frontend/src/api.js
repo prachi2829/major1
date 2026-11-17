@@ -48,7 +48,6 @@ export const api = {
   getSocialAccounts: () => req('/social-accounts'),
   oauthConfig: () => req('/oauth/config'),
   publishingHistory: (campaignId) => req('/oauth/publishing/history' + (campaignId ? '?campaign_id=' + encodeURIComponent(campaignId) : '')),
-  connectSocialAccount: (data) => post('/social-accounts', data),
   disconnectSocialAccount: (aid) => req(`/social-accounts/${aid}`, { method: 'DELETE' }),
   verifyConnections: () => req('/publishing/verify'),
   recordLiveEvent: (campaign_id, platform, event_type, count = 1) => post('/analytics/events', { campaign_id, platform, event_type, count }),
