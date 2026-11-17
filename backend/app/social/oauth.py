@@ -383,11 +383,12 @@ async def _refresh_if_needed(session_id: str, row: sqlite3.Row, tokens: dict[str
 
 def _record_event(session_id: str, campaign_id: str, platform: str, account_id: str | None, result: dict[str, Any]) -> None:
     conn = _db()
-    conn.execute("INSERT INTO publish_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (
-        secrets.token_hex(12), campaign_id, platform, account_id,
-        "published" if result.get("success") else "failed", result.get("post_id"),
-        result.get("url"), result.get("error"), datetime.now(timezone.utc).isoformat(),
-    ))
+    conn.execute(
+        "INSERT INTO publish_events(id, campaign_id, platform, account_id, status, post_id, post_url, error, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (secrets.token_hex(12), campaign_id, platform, account_id,
+         "published" if result.get("success") else "failed", result.get("post_id"),
+         result.get("url"), result.get("error"), datetime.now(timezone.utc).isoformat(), session_id),
+    )
     conn.commit()
     conn.close()
 
