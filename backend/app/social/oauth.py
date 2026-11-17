@@ -351,7 +351,7 @@ async def publish_to_platform(platform: str, content: dict[str, Any], campaign_i
         token = tokens["access_token"]
         body = content.get("body", "").strip()
         hashtags = content.get("hashtags") or []
-        caption = body + (("\\n\\n" + " ".join(hashtags)) if hashtags else "")
+        caption = body + (("\n\n" + " ".join(hashtags)) if hashtags else "")
         async with httpx.AsyncClient(timeout=45) as client:
             if platform == "twitter":
                 response = await client.post("https://api.x.com/2/tweets", json={"text": caption[:280]}, headers={"Authorization": f"Bearer {token}"})
@@ -402,7 +402,7 @@ async def publish_to_platform(platform: str, content: dict[str, Any], campaign_i
                 post_id = published.get("id")
                 permalink = await client.get(f"https://graph.facebook.com/{META_VERSION}/{post_id}", params={"fields": "permalink", "access_token": token})
                 result.update(success=True, post_id=post_id, url=permalink.json().get("permalink") if not permalink.is_error else None)
-        _record_event(campaign_id, platform, row["id"], result)
+        _record_event(campaign_id, platform, row["id"] if row else None, result)
         return result
     except Exception as exc:
         result["error"] = str(exc)
