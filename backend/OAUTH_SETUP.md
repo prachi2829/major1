@@ -1,6 +1,6 @@
 # Social OAuth setup
 
-Campaign.AI now uses OAuth authorization rather than asking users to paste access tokens into the frontend. Tokens are encrypted with Fernet and remain in the backend database.
+Campaign.AI now uses OAuth authorization rather than asking users to paste access tokens into the frontend. Tokens are encrypted with Fernet and remain in the backend database. Each browser visitor receives an anonymous, isolated guest session; no application signup is required.
 
 ## 1. Configure the backend
 
