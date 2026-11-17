@@ -19,6 +19,8 @@ export default function Workspace({ notify, health }) {
   const [scheduleTime, setScheduleTime] = useState('')
   const [scheduling, setScheduling] = useState(false)
   const [mediaUrls, setMediaUrls] = useState({})
+  const [socialAccounts, setSocialAccounts] = useState([])
+  const [accountIds, setAccountIds] = useState({})
   const timers = useRef({})
 
   const loadSchedules = useCallback(async () => {
@@ -38,6 +40,7 @@ export default function Workspace({ notify, health }) {
   }, [id, loadSchedules])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { api.getSocialAccounts().then(setSocialAccounts).catch(() => setSocialAccounts([])) }, [])
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), [])
 
   async function run(label, fn, okMsg) {
@@ -63,7 +66,7 @@ export default function Workspace({ notify, health }) {
         campaign_id: id,
         platform: p,
         scheduled_at: iso,
-        content: { ...c.content[p], media_url: mediaUrls[p] || null },
+        content: { ...c.content[p], media_url: mediaUrls[p] || null, account_id: accountIds[p] || null },
       })
       notify(`${PLAT_LABEL[p]} queued for distribution`)
       await loadSchedules()
@@ -258,6 +261,15 @@ export default function Workspace({ notify, health }) {
                   <span>Call to action</span>
                   <input disabled={locked} value={cur.call_to_action || ''} onChange={(e) => onEdit(tab, { call_to_action: e.target.value })} />
                 </label>
+                {socialAccounts.filter((a) => a.platform === tab).length > 1 && (
+                  <label className="field">
+                    <span>Publish to account</span>
+                    <select value={accountIds[tab] || ''} onChange={(e) => setAccountIds((v) => ({ ...v, [tab]: e.target.value }))}>
+                      <option value="">Most recently connected account</option>
+                      {socialAccounts.filter((a) => a.platform === tab).map((a) => <option key={a.id} value={a.id}>{a.account_name}</option>)}
+                    </select>
+                  </label>
+                )}
                 {tab === 'instagram' && (
                   <label className="field">
                     <span>Public image URL <small>(required for Instagram image publishing)</small></span>
@@ -300,7 +312,7 @@ export default function Workspace({ notify, health }) {
               </button>
               <button className="btn" disabled={!!busy || allPublished || approvedCount === 0}
                 onClick={() => run('publish', async () => {
-                  const result = await api.publish(id, platforms.filter((p) => content[p]?.status === 'approved'), mediaUrls)
+                  const result = await api.publish(id, platforms.filter((p) => content[p]?.status === 'approved'), mediaUrls, accountIds)
                   const updated = await api.get(id)
                   setC(updated)
                   const failures = (result.results || []).filter((item) => !item.success)
