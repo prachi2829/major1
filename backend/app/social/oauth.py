@@ -368,7 +368,7 @@ async def publish_to_platform(platform: str, content: dict[str, Any], campaign_i
                     "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [], "thirdPartyDistributionChannels": []},
                     "lifecycleState": "PUBLISHED",
                 }, headers={
-                    "Authorization": f"Bearer {token}", "LinkedIn-Version": os.getenv("LINKEDIN_API_VERSION", "202611"),
+                    "Authorization": f"Bearer {token}", "LinkedIn-Version": os.getenv("LINKEDIN_API_VERSION", "202610"),
                     "X-Restli-Protocol-Version": "2.0.0", "Content-Type": "application/json",
                 })
                 if response.is_error:
