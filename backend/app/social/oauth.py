@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 router = APIRouter(prefix="/oauth", tags=["Social OAuth"])
@@ -30,6 +30,8 @@ META_VERSION = os.getenv("META_GRAPH_VERSION", "v27.0")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 DB_PATH = os.getenv("SOCIAL_OAUTH_DB", str(Path(__file__).resolve().parents[1] / "social_oauth.db"))
+SESSION_COOKIE = "campaign_ai_guest"
+SESSION_TTL = 60 * 60 * 24 * 30
 
 
 def _db() -> sqlite3.Connection:
@@ -37,23 +39,63 @@ def _db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
+      CREATE TABLE IF NOT EXISTS guest_sessions (
+        session_id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS oauth_states (
         state TEXT PRIMARY KEY, platform TEXT NOT NULL, intent TEXT NOT NULL,
-        verifier TEXT, created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS oauth_accounts (
-        id TEXT PRIMARY KEY, platform TEXT NOT NULL, account_id TEXT NOT NULL,
-        account_name TEXT NOT NULL, encrypted_tokens TEXT NOT NULL,
-        expires_at INTEGER, metadata TEXT NOT NULL DEFAULT '{}',
-        connected_at TEXT NOT NULL, UNIQUE(platform, account_id)
+        verifier TEXT, created_at INTEGER NOT NULL, session_id TEXT
       );
       CREATE TABLE IF NOT EXISTS publish_events (
         id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, platform TEXT NOT NULL,
         account_id TEXT, status TEXT NOT NULL, post_id TEXT, post_url TEXT,
-        error TEXT, created_at TEXT NOT NULL
+        error TEXT, created_at TEXT NOT NULL, session_id TEXT
       );
     """)
+    tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "oauth_accounts" in tables:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(oauth_accounts)")}
+        if "session_id" not in cols:
+            conn.execute("DROP TABLE oauth_accounts")
+    conn.execute("""
+      CREATE TABLE IF NOT EXISTS oauth_accounts (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, platform TEXT NOT NULL,
+        account_id TEXT NOT NULL, account_name TEXT NOT NULL, encrypted_tokens TEXT NOT NULL,
+        expires_at INTEGER, metadata TEXT NOT NULL DEFAULT '{}', connected_at TEXT NOT NULL,
+        UNIQUE(session_id, platform, account_id)
+      )
+    """)
+    state_cols = {row["name"] for row in conn.execute("PRAGMA table_info(oauth_states)")}
+    if "session_id" not in state_cols:
+        conn.execute("ALTER TABLE oauth_states ADD COLUMN session_id TEXT")
+    event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(publish_events)")}
+    if "session_id" not in event_cols:
+        conn.execute("ALTER TABLE publish_events ADD COLUMN session_id TEXT")
+    conn.commit()
     return conn
+
+
+def get_guest_session(request: Request, response: Response) -> str:
+    raw = request.cookies.get(SESSION_COOKIE)
+    now = int(time.time())
+    conn = _db()
+    row = conn.execute("SELECT session_id, expires_at FROM guest_sessions WHERE token_hash=?",
+                       (hashlib.sha256(raw.encode()).hexdigest(),)).fetchone() if raw else None
+    if row and row["expires_at"] > now:
+        conn.execute("UPDATE guest_sessions SET expires_at=? WHERE session_id=?", (now + SESSION_TTL, row["session_id"]))
+        conn.commit()
+        conn.close()
+        return row["session_id"]
+    token = secrets.token_urlsafe(48)
+    session_id = secrets.token_hex(16)
+    conn.execute("INSERT INTO guest_sessions VALUES (?, ?, ?, ?)",
+                 (session_id, hashlib.sha256(token.encode()).hexdigest(), now, now + SESSION_TTL))
+    conn.commit()
+    conn.close()
+    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL, httponly=True,
+                        secure=BACKEND_URL.startswith("https://"), samesite="lax", path="/")
+    return session_id
 
 
 def _cipher() -> Fernet:
@@ -86,67 +128,68 @@ def _client(platform: str) -> tuple[str, str, str]:
     return config[platform]
 
 
-def _save_state(platform: str, intent: str, verifier: str | None = None) -> str:
+def _save_state(platform: str, intent: str, session_id: str, verifier: str | None = None) -> str:
     state = secrets.token_urlsafe(32)
     conn = _db()
     conn.execute("DELETE FROM oauth_states WHERE created_at < ?", (int(time.time()) - 900,))
-    conn.execute("INSERT INTO oauth_states VALUES (?, ?, ?, ?, ?)", (state, platform, intent, verifier, int(time.time())))
+    conn.execute("INSERT INTO oauth_states(state, platform, intent, verifier, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?)",
+                 (state, platform, intent, verifier, int(time.time()), session_id))
     conn.commit()
     conn.close()
     return state
 
 
-def _consume_state(state: str, platform: str) -> tuple[str, str | None]:
+def _consume_state(state: str, platform: str) -> tuple[str, str | None, str]:
     conn = _db()
     row = conn.execute("SELECT * FROM oauth_states WHERE state=?", (state,)).fetchone()
     if row:
         conn.execute("DELETE FROM oauth_states WHERE state=?", (state,))
         conn.commit()
     conn.close()
-    if not row or row["platform"] != platform or int(time.time()) - row["created_at"] > 900:
+    if not row or row["platform"] != platform or int(time.time()) - row["created_at"] > 900 or not row["session_id"]:
         raise HTTPException(400, "OAuth state is invalid or expired. Please connect again.")
-    return row["intent"], row["verifier"]
+    return row["intent"], row["verifier"], row["session_id"]
 
 
-def _store_account(platform: str, account_id: str, name: str, tokens: dict[str, Any], metadata: dict[str, Any] | None = None) -> None:
+def _store_account(session_id: str, platform: str, account_id: str, name: str, tokens: dict[str, Any], metadata: dict[str, Any] | None = None) -> None:
     conn = _db()
     now = datetime.now(timezone.utc).isoformat()
     expires_at = int(time.time()) + int(tokens.get("expires_in", 0)) if tokens.get("expires_in") else None
     conn.execute("""
-      INSERT INTO oauth_accounts(id, platform, account_id, account_name, encrypted_tokens, expires_at, metadata, connected_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(platform, account_id) DO UPDATE SET
+      INSERT INTO oauth_accounts(id, session_id, platform, account_id, account_name, encrypted_tokens, expires_at, metadata, connected_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, platform, account_id) DO UPDATE SET
         account_name=excluded.account_name, encrypted_tokens=excluded.encrypted_tokens,
         expires_at=excluded.expires_at, metadata=excluded.metadata, connected_at=excluded.connected_at
-    """, (secrets.token_hex(12), platform, account_id, name, _encrypt(tokens), expires_at, json.dumps(metadata or {}), now))
+    """, (secrets.token_hex(12), session_id, platform, account_id, name, _encrypt(tokens), expires_at, json.dumps(metadata or {}), now))
     conn.commit()
     conn.close()
 
 
-def list_accounts() -> list[dict[str, Any]]:
+def list_accounts(session_id: str) -> list[dict[str, Any]]:
     conn = _db()
-    rows = conn.execute("SELECT id, platform, account_id, account_name, connected_at, expires_at FROM oauth_accounts ORDER BY connected_at DESC").fetchall()
+    rows = conn.execute("SELECT id, platform, account_id, account_name, connected_at, expires_at FROM oauth_accounts WHERE session_id=? ORDER BY connected_at DESC", (session_id,)).fetchall()
     conn.close()
     return [dict(row) | {"connected": True, "auth_method": "oauth"} for row in rows]
 
 
-def delete_account(account_id: str) -> bool:
+def delete_account(session_id: str, account_id: str) -> bool:
     conn = _db()
-    cur = conn.execute("DELETE FROM oauth_accounts WHERE id=?", (account_id,))
+    cur = conn.execute("DELETE FROM oauth_accounts WHERE session_id=? AND id=?", (session_id, account_id))
     conn.commit()
     conn.close()
     return cur.rowcount > 0
 
 
-def _account(platform: str, account_id: str | None = None) -> sqlite3.Row:
+def _account(session_id: str, platform: str, account_id: str | None = None) -> sqlite3.Row:
     conn = _db()
     if account_id:
-        row = conn.execute("SELECT * FROM oauth_accounts WHERE platform=? AND id=?", (platform, account_id)).fetchone()
+        row = conn.execute("SELECT * FROM oauth_accounts WHERE session_id=? AND platform=? AND id=?", (session_id, platform, account_id)).fetchone()
     else:
-        row = conn.execute("SELECT * FROM oauth_accounts WHERE platform=? ORDER BY connected_at DESC LIMIT 1", (platform,)).fetchone()
+        row = conn.execute("SELECT * FROM oauth_accounts WHERE session_id=? AND platform=? ORDER BY connected_at DESC LIMIT 1", (session_id, platform)).fetchone()
     conn.close()
     if not row:
-        raise HTTPException(409, f"No {platform} account is connected. Connect it from Social Accounts first.")
+        raise HTTPException(409, f"No {platform} account is connected in this browser session. Connect it from Social Accounts first.")
     return row
 
 
