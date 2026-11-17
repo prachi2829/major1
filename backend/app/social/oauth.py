@@ -343,14 +343,15 @@ def _record_event(campaign_id: str, platform: str, account_id: str, result: dict
 
 
 async def publish_to_platform(platform: str, content: dict[str, Any], campaign_id: str, media_url: str | None = None, account_id: str | None = None) -> dict[str, Any]:
-    row = _account(platform, account_id)
-    tokens = await _refresh_if_needed(row, _decrypt(row["encrypted_tokens"]))
-    token = tokens["access_token"]
-    body = content.get("body", "").strip()
-    hashtags = content.get("hashtags") or []
-    caption = body + (("\n\n" + " ".join(hashtags)) if hashtags else "")
     result: dict[str, Any] = {"platform": platform, "success": False, "post_id": None, "url": None, "error": None}
+    row = None
     try:
+        row = _account(platform, account_id)
+        tokens = await _refresh_if_needed(row, _decrypt(row["encrypted_tokens"]))
+        token = tokens["access_token"]
+        body = content.get("body", "").strip()
+        hashtags = content.get("hashtags") or []
+        caption = body + (("\\n\\n" + " ".join(hashtags)) if hashtags else "")
         async with httpx.AsyncClient(timeout=45) as client:
             if platform == "twitter":
                 response = await client.post("https://api.x.com/2/tweets", json={"text": caption[:280]}, headers={"Authorization": f"Bearer {token}"})
