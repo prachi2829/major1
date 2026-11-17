@@ -18,6 +18,7 @@ export default function Workspace({ notify, health }) {
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduleTime, setScheduleTime] = useState('')
   const [scheduling, setScheduling] = useState(false)
+  const [mediaUrls, setMediaUrls] = useState({})
   const timers = useRef({})
 
   const loadSchedules = useCallback(async () => {
@@ -257,6 +258,13 @@ export default function Workspace({ notify, health }) {
                   <span>Call to action</span>
                   <input disabled={locked} value={cur.call_to_action || ''} onChange={(e) => onEdit(tab, { call_to_action: e.target.value })} />
                 </label>
+                {tab === 'instagram' && (
+                  <label className="field">
+                    <span>Public image URL <small>(required for Instagram image publishing)</small></span>
+                    <input type="url" placeholder="https://your-domain.com/post-image.jpg" value={mediaUrls.instagram || ''} onChange={(e) => setMediaUrls((v) => ({ ...v, instagram: e.target.value }))} />
+                    <small>Meta must be able to fetch this HTTPS image URL without logging in.</small>
+                  </label>
+                )}
 
                 <div className="cta-row">
                   <button className="btn small ghost" disabled={locked || !!busy}
@@ -272,7 +280,7 @@ export default function Workspace({ notify, health }) {
               <div className="prev-col">
                 <small className="label">Live preview · {PLAT_LABEL[tab]}</small>
                 <Preview platform={tab} content={cur} brand={input.name} />
-                {locked && cur.published_at && <p className="muted small-text">Published {new Date(cur.published_at).toLocaleString()} (simulated)</p>}
+                {locked && cur.published_at && <p className="muted small-text">Published {new Date(cur.published_at).toLocaleString()} {cur.publish_url && <>· <a href={cur.publish_url} target="_blank" rel="noreferrer">View live post</a></>}</p>}
               </div>
             </div>
           )}
@@ -291,7 +299,15 @@ export default function Workspace({ notify, health }) {
                 📅 {showSchedule ? 'Close Schedule' : 'Schedule for Later'}
               </button>
               <button className="btn" disabled={!!busy || allPublished || approvedCount === 0}
-                onClick={() => run('publish', () => api.publish(id, platforms.filter((p) => content[p]?.status === 'approved')), 'Approved content published')}>
+                onClick={() => run('publish', async () => {
+                  const result = await api.publish(id, platforms.filter((p) => content[p]?.status === 'approved'), mediaUrls)
+                  const updated = await api.get(id)
+                  setC(updated)
+                  const failures = (result.results || []).filter((item) => !item.success)
+                  if (failures.length) notify(failures.map((item) => item.platform + ': ' + (item.error || 'Publishing failed')).join(' · '), 'err')
+                  else notify('Published successfully to ' + (result.results || []).length + ' platform(s).')
+                  return null
+                }, null)}>
                 {allPublished ? 'All published ✓' : busy === 'publish' ? 'Publishing…' : 'Publish approved now'}
               </button>
             </div>
