@@ -219,13 +219,19 @@ async def oauth_config():
     }
 
 
+@router.get("/session")
+async def oauth_session(request: Request, response: Response):
+    get_guest_session(request, response)
+    return {"session_ready": True, "expires_in_days": 30}
+
+
 @router.get("/accounts")
-async def oauth_accounts():
-    return list_accounts()
+async def oauth_accounts(request: Request, response: Response):
+    return list_accounts(get_guest_session(request, response))
 
 
 @router.get("/{platform}/start")
-async def oauth_start(platform: str, intent: str | None = Query(default=None)):
+async def oauth_start(platform: str, request: Request, response: Response, intent: str | None = Query(default=None)):
     platform = platform.lower()
     if platform not in PLATFORMS:
         raise HTTPException(404, "Unsupported social platform")
@@ -234,7 +240,8 @@ async def oauth_start(platform: str, intent: str | None = Query(default=None)):
     if not client_id or not client_secret:
         raise HTTPException(503, f"Set the {provider.upper()} OAuth client ID and secret in the backend environment first.")
     _cipher()  # fail before redirect if encryption has not been configured
-    state = _save_state(provider, platform)
+    session_id = get_guest_session(request, response)
+    state = _save_state(provider, platform, session_id)
     if provider == "meta":
         params = {
             "client_id": client_id, "redirect_uri": redirect_uri, "state": state,
@@ -270,7 +277,7 @@ async def meta_callback(code: str | None = None, state: str | None = None, error
         return RedirectResponse(f"{FRONTEND_URL}/social?oauth_error={urlencode({'message': error_description or error})[8:]}")
     if not code or not state:
         raise HTTPException(400, "Missing Meta authorization code or state")
-    intent, _ = _consume_state(state, "meta")
+    intent, _, session_id = _consume_state(state, "meta")
     app_id, app_secret, redirect_uri = _client("meta")
     token = await _post_token(f"https://graph.facebook.com/{META_VERSION}/oauth/access_token", {
         "client_id": app_id, "client_secret": app_secret, "redirect_uri": redirect_uri, "code": code,
@@ -292,11 +299,11 @@ async def meta_callback(code: str | None = None, state: str | None = None, error
     for page in pages:
         page_token = {"access_token": page["access_token"], "token_type": "bearer"}
         if intent == "facebook":
-            _store_account("facebook", page["id"], page["name"], page_token, {"page_id": page["id"]})
+            _store_account(session_id, "facebook", page["id"], page["name"], page_token, {"page_id": page["id"]})
             saved += 1
         if intent == "instagram" and page.get("instagram_business_account", {}).get("id"):
             ig_id = page["instagram_business_account"]["id"]
-            _store_account("instagram", ig_id, f"{page['name']} · Instagram", page_token, {"ig_user_id": ig_id, "page_id": page["id"]})
+            _store_account(session_id, "instagram", ig_id, f"{page['name']} · Instagram", page_token, {"ig_user_id": ig_id, "page_id": page["id"]})
             saved += 1
     if not saved:
         reason = "No Facebook Pages were found for this account." if not pages else "No linked Instagram Professional account was found on your managed Pages."
@@ -310,7 +317,7 @@ async def linkedin_callback(code: str | None = None, state: str | None = None, e
         return RedirectResponse(f"{FRONTEND_URL}/social?oauth_error={error}")
     if not code or not state:
         raise HTTPException(400, "Missing LinkedIn authorization code or state")
-    _consume_state(state, "linkedin")
+    _, _, session_id = _consume_state(state, "linkedin")
     client_id, client_secret, redirect_uri = _client("linkedin")
     tokens = await _post_token("https://www.linkedin.com/oauth/v2/accessToken", {
         "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
@@ -323,7 +330,7 @@ async def linkedin_callback(code: str | None = None, state: str | None = None, e
     profile = response.json()
     person_id = profile["sub"]
     name = " ".join(filter(None, [profile.get("given_name"), profile.get("family_name")])) or profile.get("name") or "LinkedIn member"
-    _store_account("linkedin", person_id, name, tokens, {"author_urn": f"urn:li:person:{person_id}"})
+    _store_account(session_id, "linkedin", person_id, name, tokens, {"author_urn": f"urn:li:person:{person_id}"})
     return RedirectResponse(f"{FRONTEND_URL}/social?connected=linkedin")
 
 
@@ -333,7 +340,7 @@ async def twitter_callback(code: str | None = None, state: str | None = None, er
         return RedirectResponse(f"{FRONTEND_URL}/social?oauth_error={error}")
     if not code or not state:
         raise HTTPException(400, "Missing X authorization code or state")
-    _, verifier = _consume_state(state, "twitter")
+    _, verifier, session_id = _consume_state(state, "twitter")
     if not verifier:
         raise HTTPException(400, "Missing PKCE verifier. Please connect X again.")
     client_id, client_secret, redirect_uri = _client("twitter")
@@ -346,11 +353,11 @@ async def twitter_callback(code: str | None = None, state: str | None = None, er
     if response.is_error:
         raise HTTPException(502, f"X profile lookup failed: {response.text[:400]}")
     profile = response.json().get("data", {})
-    _store_account("twitter", profile["id"], f"@{profile.get('username', profile['id'])}", tokens, {"username": profile.get("username")})
+    _store_account(session_id, "twitter", profile["id"], f"@{profile.get('username', profile['id'])}", tokens, {"username": profile.get("username")})
     return RedirectResponse(f"{FRONTEND_URL}/social?connected=twitter")
 
 
-async def _refresh_if_needed(row: sqlite3.Row, tokens: dict[str, Any]) -> dict[str, Any]:
+async def _refresh_if_needed(session_id: str, row: sqlite3.Row, tokens: dict[str, Any]) -> dict[str, Any]:
     if not row["expires_at"] or row["expires_at"] > int(time.time()) + 180:
         return tokens
     platform = row["platform"]
@@ -360,7 +367,7 @@ async def _refresh_if_needed(row: sqlite3.Row, tokens: dict[str, Any]) -> dict[s
             "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
         }, auth=(client_id, client_secret))
         tokens.update(refreshed)
-        _store_account(platform, row["account_id"], row["account_name"], tokens, json.loads(row["metadata"]))
+        _store_account(session_id, platform, row["account_id"], row["account_name"], tokens, json.loads(row["metadata"]))
         return tokens
     if platform == "linkedin" and tokens.get("refresh_token"):
         client_id, client_secret, _ = _client("linkedin")
@@ -374,7 +381,7 @@ async def _refresh_if_needed(row: sqlite3.Row, tokens: dict[str, Any]) -> dict[s
     raise HTTPException(409, f"The {platform} access token has expired. Disconnect and reconnect the account.")
 
 
-def _record_event(campaign_id: str, platform: str, account_id: str, result: dict[str, Any]) -> None:
+def _record_event(session_id: str, campaign_id: str, platform: str, account_id: str | None, result: dict[str, Any]) -> None:
     conn = _db()
     conn.execute("INSERT INTO publish_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (
         secrets.token_hex(12), campaign_id, platform, account_id,
@@ -385,12 +392,12 @@ def _record_event(campaign_id: str, platform: str, account_id: str, result: dict
     conn.close()
 
 
-async def publish_to_platform(platform: str, content: dict[str, Any], campaign_id: str, media_url: str | None = None, account_id: str | None = None) -> dict[str, Any]:
+async def publish_to_platform(session_id: str, platform: str, content: dict[str, Any], campaign_id: str, media_url: str | None = None, account_id: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {"platform": platform, "success": False, "post_id": None, "url": None, "error": None}
     row = None
     try:
-        row = _account(platform, account_id)
-        tokens = await _refresh_if_needed(row, _decrypt(row["encrypted_tokens"]))
+        row = _account(session_id, platform, account_id)
+        tokens = await _refresh_if_needed(session_id, row, _decrypt(row["encrypted_tokens"]))
         token = tokens["access_token"]
         body = content.get("body", "").strip()
         hashtags = content.get("hashtags") or []
@@ -445,7 +452,7 @@ async def publish_to_platform(platform: str, content: dict[str, Any], campaign_i
                 post_id = published.get("id")
                 permalink = await client.get(f"https://graph.facebook.com/{META_VERSION}/{post_id}", params={"fields": "permalink", "access_token": token})
                 result.update(success=True, post_id=post_id, url=permalink.json().get("permalink") if not permalink.is_error else None)
-        _record_event(campaign_id, platform, row["id"] if row else None, result)
+        _record_event(session_id, campaign_id, platform, row["id"] if row else None, result)
         return result
     except Exception as exc:
         result["error"] = str(exc)
@@ -454,11 +461,12 @@ async def publish_to_platform(platform: str, content: dict[str, Any], campaign_i
 
 
 @router.get("/publishing/history")
-async def publishing_history(campaign_id: str | None = None):
+async def publishing_history(request: Request, response: Response, campaign_id: str | None = None):
+    session_id = get_guest_session(request, response)
     conn = _db()
     if campaign_id:
-        rows = conn.execute("SELECT * FROM publish_events WHERE campaign_id=? ORDER BY created_at DESC", (campaign_id,)).fetchall()
+        rows = conn.execute("SELECT * FROM publish_events WHERE session_id=? AND campaign_id=? ORDER BY created_at DESC", (session_id, campaign_id)).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM publish_events ORDER BY created_at DESC LIMIT 100").fetchall()
+        rows = conn.execute("SELECT * FROM publish_events WHERE session_id=? ORDER BY created_at DESC LIMIT 100", (session_id,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
