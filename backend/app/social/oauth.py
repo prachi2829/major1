@@ -376,7 +376,7 @@ async def _refresh_if_needed(session_id: str, row: sqlite3.Row, tokens: dict[str
             "client_id": client_id, "client_secret": client_secret,
         })
         tokens.update(refreshed)
-        _store_account(platform, row["account_id"], row["account_name"], tokens, json.loads(row["metadata"]))
+        _store_account(session_id, platform, row["account_id"], row["account_name"], tokens, json.loads(row["metadata"]))
         return tokens
     raise HTTPException(409, f"The {platform} access token has expired. Disconnect and reconnect the account.")
 
@@ -457,7 +457,7 @@ async def publish_to_platform(session_id: str, platform: str, content: dict[str,
         return result
     except Exception as exc:
         result["error"] = str(exc)
-        _record_event(campaign_id, platform, row["id"], result)
+        _record_event(session_id, campaign_id, platform, row["id"] if row else None, result)
         return result
 
 
