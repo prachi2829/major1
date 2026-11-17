@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import os
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -42,7 +42,7 @@ from .schemas import (
     ScheduleRead,
 )
 from .store import store
-from .social.oauth import router as oauth_router, list_accounts as oauth_list_accounts, delete_account as oauth_delete_account, publish_to_platform
+from .social.oauth import router as oauth_router, list_accounts as oauth_list_accounts, delete_account as oauth_delete_account, publish_to_platform, get_guest_session
 
 
 @asynccontextmanager
@@ -60,6 +60,7 @@ app.add_middleware(
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -231,7 +232,8 @@ async def approve_platform_content(cid: str, platform: str):
 # ── Publishing Flow ─────────────────────────────────────────────────
 @app.post("/campaigns/{cid}/publish")
 @app.post("/api/campaigns/{cid}/publish")
-async def publish_campaign(cid: str, body: PublishRequest = Body(default_factory=PublishRequest)):
+async def publish_campaign(cid: str, request: Request, response: Response, body: PublishRequest = Body(default_factory=PublishRequest)):
+    session_id = get_guest_session(request, response)
     c = store.get(cid)
     if not c:
         raise HTTPException(404, "Campaign not found")
@@ -246,7 +248,7 @@ async def publish_campaign(cid: str, body: PublishRequest = Body(default_factory
     now = datetime.now(timezone.utc).isoformat()
     for platform in eligible:
         post = c.content[platform]
-        result = await publish_to_platform(platform, post.model_dump(), cid,
+        result = await publish_to_platform(session_id, platform, post.model_dump(), cid,
             media_url=(body.media_urls or {}).get(platform),
             account_id=(body.account_ids or {}).get(platform))
         results.append(result)
@@ -383,21 +385,21 @@ async def cancel_schedule(sid: str):
 # ── Social Accounts Endpoints ───────────────────────────────────────
 @app.get("/social-accounts")
 @app.get("/api/social-accounts")
-async def list_social_accounts():
-    return oauth_list_accounts()
+async def list_social_accounts(request: Request, response: Response):
+    return oauth_list_accounts(get_guest_session(request, response))
 
 
 @app.delete("/social-accounts/{aid}", status_code=204)
 @app.delete("/api/social-accounts/{aid}", status_code=204)
-async def disconnect_social_account(aid: str):
-    if not oauth_delete_account(aid):
+async def disconnect_social_account(aid: str, request: Request, response: Response):
+    if not oauth_delete_account(get_guest_session(request, response), aid):
         raise HTTPException(404, "Social account not found")
 
 
 @app.get("/publishing/verify")
 @app.get("/api/publishing/verify")
-async def verify_platform_connections_endpoint():
-    accounts = oauth_list_accounts()
+async def verify_platform_connections_endpoint(request: Request, response: Response):
+    accounts = oauth_list_accounts(get_guest_session(request, response))
     return {platform: any(a["platform"] == platform for a in accounts) for platform in ("instagram", "facebook", "linkedin", "twitter")}
 
 

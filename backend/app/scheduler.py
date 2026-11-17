@@ -29,12 +29,15 @@ async def process_due_posts() -> int:
         platform = post["platform"].lower()
         content = post.get("content") or {}
         cid = post["campaign_id"]
+        session_id = content.get("_guest_session_id")
 
         logger.info(f"Processing scheduled post {post_id} for campaign {cid} on {platform}")
         store.update_schedule(post_id, {"status": "publishing"})
 
         try:
-            result = await publish_to_platform(platform, content, cid, media_url=content.get("media_url"), account_id=content.get("account_id"))
+            if not session_id:
+                raise RuntimeError("Scheduled post has no guest-session owner. Recreate it from your current browser session.")
+            result = await publish_to_platform(session_id, platform, content, cid, media_url=content.get("media_url"), account_id=content.get("account_id"))
             if result.get("success"):
                 published_at = datetime.now(timezone.utc).isoformat()
                 store.update_schedule(

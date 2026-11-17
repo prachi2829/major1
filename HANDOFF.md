@@ -10,7 +10,7 @@
 - Browser click-through (Playwright + system Chrome, Gemini stubbed) passes with zero page errors. Still do a visual pass at phone widths.
 - Fixed bug: a `useEffect` returning `window.scrollTo()` crashed the app on navigation (blank page).
 - The user's ORIGINAL code at localhost:5173 was not accessible; this is a fresh rebuild from their written spec. If their old code has extra pieces, merge selectively.
-- Real OAuth publishing is implemented on `feat/oauth-social-publishing`: encrypted token storage, Meta OAuth for Facebook Pages / Instagram Professional accounts, LinkedIn member OAuth, X OAuth 2.0 PKCE, real publish calls, publish history, and scheduled publishing through the same adapters. Setup guide: `backend/OAUTH_SETUP.md`.
+- Real OAuth publishing is implemented on `main`: encrypted token storage, Meta OAuth for Facebook Pages / Instagram Professional accounts, LinkedIn member OAuth, X OAuth 2.0 PKCE, real publish calls, publish history, and scheduled publishing through the same adapters. Setup guide: `backend/OAUTH_SETUP.md`.
 - Live provider posting has not been end-to-end tested because it requires real developer apps, approved scopes, callback URLs, credentials, and authorized social accounts. Tests should mock network calls.
 - This repo has no end-user auth/tenant isolation: connected social accounts are shared by this single workspace. Do not deploy as a multi-tenant service without user ownership and endpoint authorization.
 
@@ -24,3 +24,9 @@
 `Strategy {campaign_goal, core_message, content_pillars[], messaging_approach, call_to_action, campaign_direction, source}`
 `PlatformContent {platform, headline, body, hashtags[], call_to_action, status: draft|approved|published, edited, published_at, source}`
 Status gates: content needs strategy; publish needs approved; published is locked; editing resets approval.
+
+
+## Anonymous guest social sessions
+- Branch `feat/guest-session-social-isolation` adds anonymous browser sessions with HttpOnly/SameSite cookies, server-side hashed session tokens, 30-day rolling expiry, OAuth-state binding, and per-session account/token/publishing-history isolation.
+- Social publishing and scheduled posts use the owning guest session. Clearing browser cookies ends access to that session.
+- Campaign records and some other app data remain in the shared campaign store; this is not yet full multi-tenant privacy. Scope campaigns, schedules, analytics, and all related endpoints before positioning the entire app as a private multi-user SaaS.

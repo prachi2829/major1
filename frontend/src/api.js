@@ -5,6 +5,7 @@ async function req(path, options = {}) {
   try {
     res = await fetch(BASE + path, {
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       ...options,
     })
   } catch {
@@ -46,6 +47,7 @@ export const api = {
   getFeedback: (id) => post(`/campaigns/${id}/feedback`),
   getFeedbackHistory: (id) => req(`/campaigns/${id}/feedback`),
   getSocialAccounts: () => req('/social-accounts'),
+  ensureGuestSession: () => req('/oauth/session'),
   oauthConfig: () => req('/oauth/config'),
   publishingHistory: (campaignId) => req('/oauth/publishing/history' + (campaignId ? '?campaign_id=' + encodeURIComponent(campaignId) : '')),
   disconnectSocialAccount: (aid) => req(`/social-accounts/${aid}`, { method: 'DELETE' }),
